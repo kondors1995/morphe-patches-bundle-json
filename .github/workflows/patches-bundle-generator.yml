@@ -3,7 +3,7 @@ name: Patches Bundle json generator
 on:
   schedule:
     - cron: '0 0 * * *'
-  workflow_dispatch:
+  workflow_dispatch:      # Manual trigger
 
 jobs:
   check-and-update:
@@ -11,7 +11,7 @@ jobs:
 
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
         with:
           token: ${{ secrets.MORPHE_PAT }}
 
