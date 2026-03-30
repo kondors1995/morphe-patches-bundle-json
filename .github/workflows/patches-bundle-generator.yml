@@ -3,7 +3,7 @@ name: Patches Bundle Generator
 on:
   schedule:
     - cron: '0 0 * * *'
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
   check-and-update:
@@ -13,7 +13,7 @@ jobs:
       - name: Checkout this repo
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.MORPHE_PAT }}
 
       - name: Fetch latest release from hoo-dles/morphe-patches
         id: upstream
