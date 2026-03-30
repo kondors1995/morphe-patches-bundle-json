@@ -1,36 +1,104 @@
-# This is a basic workflow to help you get started with Actions
+name: Patches Bundle Generator
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch: 
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  check-and-update:
     runs-on: ubuntu-latest
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Fetch latest release from hoo-dles/morphe-patches
+        id: upstream
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          RELEASE=$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/hoo-dles/morphe-patches/releases/latest)
+
+          TAG=$(echo "$RELEASE" | jq -r '.tag_name')
+          DESCRIPTION=$(echo "$RELEASE" | jq -r '.body // ""')
+
+          # Find the .mpp asset download URL
+          DOWNLOAD_URL=$(echo "$RELEASE" | jq -r '
+            .assets[]
+            | select(.name | test("patches.*\\.mpp"))
+            | .browser_download_url
+          ' | head -n1)
+
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "ERROR: Could not fetch upstream release tag."
+            exit 1
+          fi
+
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "ERROR: No .mpp asset found in release $TAG."
+            exit 1
+          fi
+
+          echo "tag=$TAG"             >> "$GITHUB_OUTPUT"
+          echo "download_url=$DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
+
+          # Multi-line description — use delimiter
+          EOF=$(openssl rand -hex 8)
+          echo "description<<$EOF"   >> "$GITHUB_OUTPUT"
+          echo "$DESCRIPTION"        >> "$GITHUB_OUTPUT"
+          echo "$EOF"                >> "$GITHUB_OUTPUT"
+
+      - name: Read current version from patches-bundle.json
+        id: current
+        run: |
+          CURRENT_VERSION=""
+          if [ -f patches-bundle.json ]; then
+            CURRENT_VERSION=$(jq -r '.version // ""' patches-bundle.json)
+          fi
+          echo "version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Compare versions
+        id: compare
+        run: |
+          UPSTREAM="${{ steps.upstream.outputs.tag }}"
+          CURRENT="${{ steps.current.outputs.version }}"
+
+          echo "Upstream : $UPSTREAM"
+          echo "Current  : $CURRENT"
+
+          if [ "$UPSTREAM" = "$CURRENT" ]; then
+            echo "No update needed."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New release detected — will update."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update patches-bundle.json
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          jq -n \
+            --arg version      "${{ steps.upstream.outputs.tag }}" \
+            --arg description  "${{ steps.upstream.outputs.description }}" \
+            --arg download_url "${{ steps.upstream.outputs.download_url }}" \
+            '{
+              version: $version,
+              description: $description,
+              download_url: $download_url
+            }' > patches-bundle.json
+
+          echo "patches-bundle.json updated:"
+          cat patches-bundle.json
+
+      - name: Commit and push
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add patches-bundle.json
+          git commit -m "chore: update patches-bundle to ${{ steps.upstream.outputs.tag }}"
+          git push
