@@ -1,4 +1,4 @@
-name: Patches Bundle Generator
+name: Patches Bundle json generator
 
 on:
   schedule:
@@ -23,7 +23,11 @@ jobs:
             https://api.github.com/repos/hoo-dles/morphe-patches/releases/latest)
 
           TAG=$(echo "$RELEASE" | jq -r '.tag_name')
+          # Strip leading 'v' — version field must be "1.16.0" not "v1.16.0"
+          VERSION=$(echo "$TAG" | sed 's/^v//')
           DESCRIPTION=$(echo "$RELEASE" | jq -r '.body // ""')
+          # Strip trailing 'Z' to match format "2026-03-28T17:32:55"
+          CREATED_AT=$(echo "$RELEASE" | jq -r '.published_at | rtrimstr("Z")')
 
           # Find the .mpp asset download URL
           DOWNLOAD_URL=$(echo "$RELEASE" | jq -r '
@@ -31,6 +35,14 @@ jobs:
             | select(.name | test("patches.*\\.mpp"))
             | .browser_download_url
           ' | head -n1)
+
+          # Find signature asset if present (.asc / .sig / .signature)
+          SIGNATURE_DOWNLOAD_URL=$(echo "$RELEASE" | jq -r '
+            .assets[]
+            | select(.name | test("patches.*\\.(asc|sig|signature)"))
+            | .browser_download_url
+          ' | head -n1)
+          SIGNATURE_DOWNLOAD_URL="${SIGNATURE_DOWNLOAD_URL:-}"
 
           if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
             echo "ERROR: Could not fetch upstream release tag."
@@ -42,14 +54,17 @@ jobs:
             exit 1
           fi
 
-          echo "tag=$TAG"             >> "$GITHUB_OUTPUT"
-          echo "download_url=$DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"                                        >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"                                >> "$GITHUB_OUTPUT"
+          echo "download_url=$DOWNLOAD_URL"                      >> "$GITHUB_OUTPUT"
+          echo "created_at=$CREATED_AT"                          >> "$GITHUB_OUTPUT"
+          echo "signature_download_url=$SIGNATURE_DOWNLOAD_URL"  >> "$GITHUB_OUTPUT"
 
           # Multi-line description — use delimiter
           EOF=$(openssl rand -hex 8)
-          echo "description<<$EOF"   >> "$GITHUB_OUTPUT"
-          echo "$DESCRIPTION"        >> "$GITHUB_OUTPUT"
-          echo "$EOF"                >> "$GITHUB_OUTPUT"
+          echo "description<<$EOF"  >> "$GITHUB_OUTPUT"
+          echo "$DESCRIPTION"       >> "$GITHUB_OUTPUT"
+          echo "$EOF"               >> "$GITHUB_OUTPUT"
 
       - name: Read current version from patches-bundle.json
         id: current
@@ -63,7 +78,7 @@ jobs:
       - name: Compare versions
         id: compare
         run: |
-          UPSTREAM="${{ steps.upstream.outputs.tag }}"
+          UPSTREAM="${{ steps.upstream.outputs.version }}"
           CURRENT="${{ steps.current.outputs.version }}"
 
           echo "Upstream : $UPSTREAM"
@@ -81,13 +96,17 @@ jobs:
         if: steps.compare.outputs.changed == 'true'
         run: |
           jq -n \
-            --arg version      "${{ steps.upstream.outputs.tag }}" \
-            --arg description  "${{ steps.upstream.outputs.description }}" \
-            --arg download_url "${{ steps.upstream.outputs.download_url }}" \
+            --arg version                "${{ steps.upstream.outputs.version }}" \
+            --arg description            "${{ steps.upstream.outputs.description }}" \
+            --arg download_url           "${{ steps.upstream.outputs.download_url }}" \
+            --arg created_at             "${{ steps.upstream.outputs.created_at }}" \
+            --arg signature_download_url "${{ steps.upstream.outputs.signature_download_url }}" \
             '{
-              version: $version,
+              created_at: $created_at,
               description: $description,
-              download_url: $download_url
+              download_url: $download_url,
+              signature_download_url: $signature_download_url,
+              version: $version
             }' > patches-bundle.json
 
           echo "patches-bundle.json updated:"
